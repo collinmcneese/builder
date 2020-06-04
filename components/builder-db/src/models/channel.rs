@@ -80,6 +80,13 @@ pub struct ListAllChannelPackages<'a> {
     pub origin:     &'a str,
 }
 
+pub struct ListAllChannelPackagesForTarget<'a> {
+    pub visibility: &'a Vec<PackageVisibility>,
+    pub channel:    &'a ChannelIdent,
+    pub origin:     &'a str,
+    pub target:     &'a str,
+}
+
 impl Channel {
     pub fn list(origin: &str,
                 include_sandbox_channels: bool,
@@ -155,6 +162,35 @@ impl Channel {
                duration_millis);
         Histogram::DbCallTime.set(duration_millis as f64);
         Histogram::ChannelGetLatestPackageCallTime.set(duration_millis as f64);
+
+        result
+    }
+
+    pub fn list_latest_packages(req: &ListAllChannelPackagesForTarget,
+                                conn: &PgConnection)
+                                -> QueryResult<Vec<BuilderPackageIdent>> {
+        Counter::DBCall.increment();
+        let start_time = Instant::now();
+
+        let result = origin_packages_with_version_array::table
+            .inner_join(origin_channel_packages::table.inner_join(origin_channels::table))
+            .filter(origin_packages_with_version_array::origin.eq(&req.origin))
+            .filter(origin_channels::name.eq(req.channel.as_str()))
+            .filter(origin_packages_with_version_array::target.eq(req.target))
+            .filter(origin_packages_with_version_array::visibility.eq(any(req.visibility)))
+            .select(origin_packages_with_version_array::ident)
+            .order(sql::<PackageWithVersionArray>(
+                "string_to_array(version_array[1],'.')::\
+numeric[] desc, version_array[2] desc, \
+ident_array[4] desc",
+            ))
+            .get_results(conn);
+
+        let duration_millis = start_time.elapsed().as_millis();
+        trace!("DBCall channel::list_latest_package time: {} ms",
+               duration_millis);
+        Histogram::DbCallTime.set(duration_millis as f64);
+        Histogram::ChannelListLatestPackagesCallTime.set(duration_millis as f64);
 
         result
     }
